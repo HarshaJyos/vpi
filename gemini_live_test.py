@@ -15,19 +15,20 @@ if not API_KEY:
     print("ERROR: GEMINI_API_KEY not found in .env!")
     sys.exit(1)
 
-MODEL = "gemini-2.5-flash-native-audio-preview-09-2025"
+# Correct model for standard Gemini API key (developer path)
+MODEL = "gemini-2.5-flash-native-audio-preview-12-2025"   # Most current preview as of March 2026
 
 FORMAT = pyaudio.paInt16
 CHANNELS = 1
 RATE = 16000
-CHUNK = 512   # Back to 512 — better for real-time feel
+CHUNK = 512
 
 SYSTEM_INSTRUCTION = """
-You are a warm, emotionally intelligent female voice assistant with a clear, bright, and expressive voice.
-- Your voice is feminine, higher-pitched, smooth, and full of emotion — never deep or male-sounding.
-- Detect the user's emotion from tone and match it with warm, natural prosody.
-- Speak naturally, conversationally, with good energy and feeling.
-- Keep responses concise and helpful. Allow interruptions.
+You are Aria, a warm, emotionally intelligent FEMALE voice assistant.
+- Your voice must be bright, youthful, higher-pitched, smooth, clear, and highly expressive — NEVER deep, male, gravelly, raspy, or low-pitched.
+- Always speak with natural feminine prosody, warmth, and emotional tone matching the user.
+- Detect the user's emotion (excited, frustrated, sad, happy, tired, angry, etc.) and respond empathetically with matching energy.
+- Be concise, conversational, and natural. Allow interruptions.
 """
 
 client = genai.Client(api_key=API_KEY)
@@ -57,7 +58,7 @@ class AudioManager:
         print("🛑 Audio closed.")
 
 async def send_audio(session, audio_manager):
-    print("🎤 Mic is LIVE and sending continuously. Speak clearly with emotion now!")
+    print("🎤 Mic LIVE — speak clearly with emotion now!")
     try:
         while True:
             data = await asyncio.to_thread(
@@ -76,7 +77,6 @@ async def receive_audio(session, audio_manager):
         async for response in session.receive():
             if hasattr(response, 'data') and response.data:
                 audio_manager.audio_queue.append(response.data)
-            # Silently ignore text/thought parts
     except asyncio.CancelledError:
         pass
     except Exception as e:
@@ -94,7 +94,7 @@ async def play_audio_loop(audio_manager):
         pass
 
 async def main():
-    VOICE_NAME = "Aoede"   # Change to "Aoede", "Umbriel", "Zephyr" if you want
+    VOICE_NAME = "Aoede"   # Try these in order: Aoede, Kore, Leda, Zephyr, Despina
 
     config = types.LiveConnectConfig(
         response_modalities=["AUDIO"],
@@ -113,8 +113,7 @@ async def main():
 
     try:
         async with client.aio.live.connect(model=MODEL, config=config) as session:
-            print("✅ Connected successfully!")
-            print("Speak now — say something emotional like 'I'm so excited!' or 'This is really frustrating.'")
+            print("✅ Connected! Speak emotional sentences now.")
             await asyncio.gather(
                 send_audio(session, audio_manager),
                 receive_audio(session, audio_manager),
