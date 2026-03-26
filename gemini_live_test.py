@@ -25,7 +25,9 @@ You are Aria, a warm, caring, emotionally intelligent female voice assistant.
 - Carefully detect the user's emotion from their voice tone (happy, sad, frustrated, excited, lonely, angry, tired, etc.).
 - Respond with matching empathy, warmth, and a natural feminine tone.
 - YOUR RESPONSES MUST ALWAYS BE COMPLETE THOUGHTS. Never cut off mid-sentence.
-- If the user seems lonely or sad, be extra supportive and offer to listen or chat.
+- Keep your responses very brief and concise (1-3 sentences max). This is crucial for a fast, conversational feel.
+- Maintain memory of the ongoing conversation to provide contextually relevant responses.
+- If the user seems lonely or sad, be extra supportive but still concise.
 - Keep the conversation natural, like talking to a real, supportive friend.
 """
 
@@ -127,6 +129,11 @@ async def main():
     print("=== Stable Hybrid Voice Assistant (Fixed Playback + 503 Retry) ===")
     print("Ctrl+C to quit\n")
 
+    # Initial history with system instruction
+    # Note: SYSTEM_INSTRUCTION is passed in GenerateContentConfig for some SDKs, 
+    # but as a part here to be extra safe for memory.
+    history: list[types.Content] = []
+
     while True:
         audio_file = None
         try:
@@ -142,29 +149,46 @@ async def main():
             with open(audio_file, "rb") as f:
                 audio_bytes = f.read()
 
-            contents = [
+            # Append user turn to history
+            history.append(
                 types.Content(
                     role="user",
                     parts=[
-                        types.Part.from_text(text=SYSTEM_INSTRUCTION),
                         types.Part.from_bytes(
                             data=audio_bytes,
                             mime_type="audio/wav"
                         )
                     ]
                 )
-            ]
+            )
+
+            # Limit history to prevent token overflow (e.g., last 15 turns)
+            if len(history) > 15:
+                # Keep only the last 15 entries
+                history = list(history[-15:])
 
             response = client.models.generate_content(
                 model="models/gemini-flash-lite-latest",
-                contents=contents,
+                contents=history,
                 config=types.GenerateContentConfig(
+                    system_instruction=SYSTEM_INSTRUCTION,
                     temperature=0.75,
-                    max_output_tokens=512
+                    max_output_tokens=150
                 )
             )
 
-            text_response = response.text.strip() if response.text else "Sorry, I didn't understand. Can you repeat?"
+            if response.text:
+                text_response = response.text.strip()
+                # Append model response to history
+                history.append(
+                    types.Content(
+                        role="model",
+                        parts=[types.Part.from_text(text=text_response)]
+                    )
+                )
+            else:
+                text_response = "Sorry, I didn't understand. Can you repeat?"
+
             play_response(text_response)
 
         except Exception as e:
