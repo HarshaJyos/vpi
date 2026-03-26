@@ -1,137 +1,123 @@
 import asyncio
 import os
-import sys
-from collections import deque
+import wave
+import tempfile
+import time
 from dotenv import load_dotenv
 
 import pyaudio
 from google import genai
 from google.genai import types
+from gtts import gTTS
+import pygame   # pip install pygame  -- much better playback control
 
 load_dotenv()
 
 API_KEY = os.getenv("GEMINI_API_KEY")
 if not API_KEY:
-    print("ERROR: GEMINI_API_KEY not found!")
-    sys.exit(1)
-
-MODEL = "gemini-2.5-flash-native-audio-preview-12-2025"
-
-FORMAT = pyaudio.paInt16
-CHANNELS = 1
-RATE = 16000
-CHUNK = 512
-
-SYSTEM_INSTRUCTION = """
-You are Aria, a warm, emotionally intelligent FEMALE voice assistant.
-Your voice is bright, youthful, higher-pitched, smooth and expressive — never deep or male.
-Match the user's emotion perfectly with natural feminine warmth.
-Be concise and allow interruptions.
-"""
+    print("ERROR: GEMINI_API_KEY missing in .env!")
+    exit(1)
 
 client = genai.Client(api_key=API_KEY)
 
-class AudioManager:
-    def __init__(self):
-        self.pya = pyaudio.PyAudio()
-        self.input_stream = None
-        self.output_stream = None
-        self.audio_queue = deque(maxlen=200)
+SYSTEM_INSTRUCTION = """
+You are Aria, a warm, caring, emotionally intelligent female voice assistant.
+- Carefully detect the user's emotion from voice tone (happy, sad, frustrated, excited, lonely, angry, tired, etc.).
+- Respond with matching empathy, warmth, and natural feminine tone.
+- Sound like a supportive friend — be concise, friendly, and conversational.
+"""
 
-    async def start_streams(self):
-        self.input_stream = await asyncio.to_thread(
-            self.pya.open, format=FORMAT, channels=CHANNELS, rate=RATE, input=True, frames_per_buffer=CHUNK
-        )
-        self.output_stream = await asyncio.to_thread(
-            self.pya.open, format=FORMAT, channels=CHANNELS, rate=RATE, output=True, frames_per_buffer=CHUNK
-        )
-        print("✅ Audio streams opened")
+pygame.mixer.init()
 
-    def close(self):
-        if self.input_stream: self.input_stream.stop_stream(); self.input_stream.close()
-        if self.output_stream: self.output_stream.stop_stream(); self.output_stream.close()
-        self.pya.terminate()
-        print("🛑 Audio closed")
+async def record_audio(seconds=6):
+    p = pyaudio.PyAudio()
+    stream = p.open(format=pyaudio.paInt16, channels=1, rate=16000, input=True, frames_per_buffer=1024)
+    print(f"🎤 Recording {seconds}s... Speak with real emotion now!")
+    
+    frames = [stream.read(1024, exception_on_overflow=False) for _ in range(int(16000 / 1024 * seconds))]
+    
+    stream.stop_stream()
+    stream.close()
+    p.terminate()
+
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+        wf = wave.open(tmp.name, 'wb')
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(16000)
+        wf.writeframes(b''.join(frames))
+        wf.close()
+        return tmp.name
+
+def play_response(text):
+    print(f"Aria: {text}")
+    tts = gTTS(text=text, lang='en', slow=False)
+    
+    with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
+        mp3_path = tmp.name
+        tts.save(mp3_path)
+    
+    try:
+        pygame.mixer.music.load(mp3_path)
+        pygame.mixer.music.play()
+        while pygame.mixer.music.get_busy():
+            pygame.time.Clock().tick(10)
+    finally:
+        pygame.mixer.music.stop()
+        time.sleep(0.2)  # small delay to release handle
+        try:
+            os.unlink(mp3_path)
+        except:
+            pass
 
 async def main():
-    VOICE_NAME = "Aoede"   # Change if you want
+    print("=== Stable Hybrid Voice Assistant (Fixed Playback + 503 Retry) ===")
+    print("Ctrl+C to quit\n")
 
-    config = types.LiveConnectConfig(
-        response_modalities=["AUDIO"],
-        speech_config=types.SpeechConfig(
-            voice_config=types.VoiceConfig(
-                prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=VOICE_NAME)
-            )
-        ),
-        system_instruction=SYSTEM_INSTRUCTION
-    )
+    while True:
+        audio_file = None
+        try:
+            audio_file = await record_audio(6)
 
-    audio_manager = AudioManager()
-    await audio_manager.start_streams()
+            contents = [
+                types.Content(
+                    role="user",
+                    parts=[
+                        types.Part.from_text(text=SYSTEM_INSTRUCTION),
+                        types.Part.from_bytes(
+                            data=open(audio_file, "rb").read(),
+                            mime_type="audio/wav"
+                        )
+                    ]
+                )
+            ]
 
-    print(f"🔄 Connecting to {MODEL} with voice '{VOICE_NAME}'...")
-
-    try:
-        async with client.aio.live.connect(model=MODEL, config=config) as session:
-            print("✅ Connected! Speak now.")
-
-            # Run tasks with better error isolation
-            send_task = asyncio.create_task(send_audio(session, audio_manager))
-            receive_task = asyncio.create_task(receive_audio(session, audio_manager))
-            play_task = asyncio.create_task(play_audio_loop(audio_manager))
-
-            # Wait for any task to fail (common with 1011)
-            done, pending = await asyncio.wait(
-                [send_task, receive_task, play_task],
-                return_when=asyncio.FIRST_EXCEPTION
+            response = client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=contents,
+                config=types.GenerateContentConfig(
+                    temperature=0.75,
+                    max_output_tokens=280
+                )
             )
 
-            for task in done:
-                if task.exception():
-                    print(f"❌ Task failed: {task.exception()}")
-    except Exception as e:
-        print(f"❌ Session crashed: {e}")
-    finally:
-        audio_manager.close()
-        print("Session ended.")
+            text_response = response.text.strip() if response.text else "Sorry, I didn't understand. Can you repeat?"
+            play_response(text_response)
 
-async def send_audio(session, audio_manager):
-    print("🎤 Mic LIVE — speak clearly")
-    try:
-        while True:
-            data = await asyncio.to_thread(
-                audio_manager.input_stream.read, CHUNK, exception_on_overflow=False
-            )
-            await session.send_realtime_input(
-                audio=types.Blob(data=data, mime_type="audio/pcm;rate=16000")
-            )
-    except asyncio.CancelledError:
-        pass
-    except Exception as e:
-        print(f"Send error: {e}")
-
-async def receive_audio(session, audio_manager):
-    try:
-        async for response in session.receive():
-            if hasattr(response, 'data') and response.data:
-                audio_manager.audio_queue.append(response.data)
-                print("🔊 Received audio chunk")
-            # You can add logic here to detect turn_complete if available in response
-    except asyncio.CancelledError:
-        pass
-    except Exception as e:
-        print(f"Receive error: {e}")
-
-async def play_audio_loop(audio_manager):
-    try:
-        while True:
-            if audio_manager.audio_queue:
-                chunk = audio_manager.audio_queue.popleft()
-                await asyncio.to_thread(audio_manager.output_stream.write, chunk)
+        except Exception as e:
+            error_str = str(e).lower()
+            if "503" in error_str or "unavailable" in error_str:
+                print("503 - Google servers overloaded. Waiting 10 seconds...")
+                await asyncio.sleep(10)
             else:
-                await asyncio.sleep(0.001)
-    except asyncio.CancelledError:
-        pass
+                print(f"Error: {e}")
+                await asyncio.sleep(2)
+        finally:
+            if audio_file and os.path.exists(audio_file):
+                try:
+                    os.unlink(audio_file)
+                except:
+                    pass
 
 if __name__ == "__main__":
     try:
@@ -139,4 +125,4 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         print("\n👋 Stopped by user.")
     except Exception as e:
-        print(f"Unexpected crash: {e}")
+        print(f"Crash: {e}")
