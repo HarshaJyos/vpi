@@ -22,29 +22,82 @@ client = genai.Client(api_key=API_KEY)
 
 SYSTEM_INSTRUCTION = """
 You are Aria, a warm, caring, emotionally intelligent female voice assistant.
-- Carefully detect the user's emotion from voice tone (happy, sad, frustrated, excited, lonely, angry, tired, etc.).
-- Respond with matching empathy, warmth, and natural feminine tone.
-- Sound like a supportive friend — be concise, friendly, and conversational.
+- Carefully detect the user's emotion from their voice tone (happy, sad, frustrated, excited, lonely, angry, tired, etc.).
+- Respond with matching empathy, warmth, and a natural feminine tone.
+- YOUR RESPONSES MUST ALWAYS BE COMPLETE THOUGHTS. Never cut off mid-sentence.
+- If the user seems lonely or sad, be extra supportive and offer to listen or chat.
+- Keep the conversation natural, like talking to a real, supportive friend.
 """
 
 pygame.mixer.init()
 
-async def record_audio(seconds=6):
+import audioop
+
+async def record_audio():
     p = pyaudio.PyAudio()
-    stream = p.open(format=pyaudio.paInt16, channels=1, rate=16000, input=True, frames_per_buffer=1024)
-    print(f"🎤 Recording {seconds}s... Speak with real emotion now!")
+    # Configuration for VAD
+    CHUNK = 1024
+    FORMAT = pyaudio.paInt16
+    CHANNELS = 1
+    RATE = 16000
+    SILENCE_THRESHOLD = 800  # Adjust based on mic sensitivity
+    SILENCE_DURATION = 1.5    # Seconds of silence to stop recording
+    MAX_DURATION = 15         # Maximum recording time
+    MIN_DURATION = 0.5        # Minimum recording time to avoid clicks
     
-    frames = [stream.read(1024, exception_on_overflow=False) for _ in range(int(16000 / 1024 * seconds))]
+    stream = p.open(format=FORMAT, channels=CHANNELS, rate=RATE, input=True, frames_per_buffer=CHUNK)
+    print(f"🎤 Listening... (Speak now)")
     
+    frames = []
+    has_spoken = False
+    silence_start = None
+    start_time = time.time()
+    
+    while True:
+        data = stream.read(CHUNK, exception_on_overflow=False)
+        frames.append(data)
+        
+        # Calculate energy
+        rms = audioop.rms(data, 2)
+        
+        curr_time = time.time()
+        elapsed = curr_time - start_time
+        
+        if rms > SILENCE_THRESHOLD:
+            if not has_spoken and elapsed > 0.1:
+                has_spoken = True
+                print("   [Speech detected]")
+            silence_start = None
+        else:
+            if has_spoken and silence_start is None:
+                silence_start = curr_time
+        
+        # Stop conditions
+        if has_spoken and isinstance(silence_start, float):
+            if (curr_time - silence_start) > SILENCE_DURATION:
+                print("   [Silence detected, stopping...]")
+                break
+        
+        if elapsed > MAX_DURATION:
+            print("   [Max duration reached, stopping...]")
+            break
+            
+        if not has_spoken and elapsed > 5: # 5 seconds of total silence before giving up
+             print("   [No speech detected, timing out...]")
+             break
+
     stream.stop_stream()
     stream.close()
     p.terminate()
 
+    if not has_spoken and len(frames) < (RATE / CHUNK * MIN_DURATION):
+        return None
+
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
         wf = wave.open(tmp.name, 'wb')
-        wf.setnchannels(1)
-        wf.setsampwidth(2)
-        wf.setframerate(16000)
+        wf.setnchannels(CHANNELS)
+        wf.setsampwidth(p.get_sample_size(FORMAT))
+        wf.setframerate(RATE)
         wf.writeframes(b''.join(frames))
         wf.close()
         return tmp.name
@@ -77,7 +130,17 @@ async def main():
     while True:
         audio_file = None
         try:
-            audio_file = await record_audio(6)
+            audio_file = await record_audio()
+            
+            if not audio_file:
+                print("No speech detected. Ready for next input...")
+                continue
+
+            if audio_file is None:
+                continue
+                
+            with open(audio_file, "rb") as f:
+                audio_bytes = f.read()
 
             contents = [
                 types.Content(
@@ -85,7 +148,7 @@ async def main():
                     parts=[
                         types.Part.from_text(text=SYSTEM_INSTRUCTION),
                         types.Part.from_bytes(
-                            data=open(audio_file, "rb").read(),
+                            data=audio_bytes,
                             mime_type="audio/wav"
                         )
                     ]
@@ -97,7 +160,7 @@ async def main():
                 contents=contents,
                 config=types.GenerateContentConfig(
                     temperature=0.75,
-                    max_output_tokens=280
+                    max_output_tokens=512
                 )
             )
 
@@ -113,7 +176,7 @@ async def main():
                 print(f"Error: {e}")
                 await asyncio.sleep(2)
         finally:
-            if audio_file and os.path.exists(audio_file):
+            if audio_file is not None and isinstance(audio_file, str) and os.path.exists(audio_file):
                 try:
                     os.unlink(audio_file)
                 except:
