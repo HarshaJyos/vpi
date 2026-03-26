@@ -156,7 +156,7 @@ async def main():
             ]
 
             response = client.models.generate_content(
-                model="gemini-2.5-flash",
+                model="models/gemini-flash-lite-latest",
                 contents=contents,
                 config=types.GenerateContentConfig(
                     temperature=0.75,
@@ -169,8 +169,13 @@ async def main():
 
         except Exception as e:
             error_str = str(e).lower()
-            if "503" in error_str or "unavailable" in error_str:
-                print("503 - Google servers overloaded. Waiting 10 seconds...")
+            if "429" in error_str or "resource_exhausted" in error_str:
+                print(f"429 - Quota exhausted: {e}")
+                print("Waiting 60 seconds...")
+                await asyncio.sleep(60)
+            elif "503" in error_str or "unavailable" in error_str:
+                print(f"503 - Google servers overloaded: {e}")
+                print("Waiting 10 seconds...")
                 await asyncio.sleep(10)
             else:
                 print(f"Error: {e}")
