@@ -1,15 +1,14 @@
+
 import asyncio
 import os
-import wave
 import tempfile
 import time
 from dotenv import load_dotenv
-
-import pyaudio
+import subprocess
 from google import genai
 from google.genai import types
 from gtts import gTTS
-import pygame   # pip install pygame  -- much better playback control
+import pygame
 
 load_dotenv()
 
@@ -22,92 +21,32 @@ client = genai.Client(api_key=API_KEY)
 
 SYSTEM_INSTRUCTION = """
 You are Aria, a warm, caring, emotionally intelligent female voice assistant.
-- Carefully detect the user's emotion from their voice tone (happy, sad, frustrated, excited, lonely, angry, tired, etc.).
-- Respond with matching empathy, warmth, and a natural feminine tone.
-- YOUR RESPONSES MUST ALWAYS BE COMPLETE THOUGHTS. Never cut off mid-sentence.
-- Keep your responses very brief and concise (1-3 sentences max). This is crucial for a fast, conversational feel.
-- Maintain memory of the ongoing conversation to provide contextually relevant responses.
-- If the user seems lonely or sad, be extra supportive but still concise.
-- Keep the conversation natural, like talking to a real, supportive friend.
+Detect the user's emotion from voice tone and respond with matching empathy and warmth.
+Keep responses short, natural and friendly (1-3 sentences maximum).
 """
 
 pygame.mixer.init()
-
-import audioop
+pygame.mixer.music.set_volume(0.85)   # Slightly lower volume to reduce distortion
 
 async def record_audio():
-    p = pyaudio.PyAudio()
-    # Configuration for VAD
-    CHUNK = 1024
-    FORMAT = pyaudio.paInt16
-    CHANNELS = 1
-    RATE = 16000
-    SILENCE_THRESHOLD = 800  # Adjust based on mic sensitivity
-    SILENCE_DURATION = 1.5    # Seconds of silence to stop recording
-    MAX_DURATION = 15         # Maximum recording time
-    MIN_DURATION = 0.5        # Minimum recording time to avoid clicks
-    
-    stream = p.open(format=FORMAT, channels=CHANNELS, rate=RATE, input=True, frames_per_buffer=CHUNK)
-    print(f"🎤 Listening... (Speak now)")
-    
-    frames = []
-    has_spoken = False
-    silence_start = None
-    start_time = time.time()
-    
-    while True:
-        data = stream.read(CHUNK, exception_on_overflow=False)
-        frames.append(data)
-        
-        # Calculate energy
-        rms = audioop.rms(data, 2)
-        
-        curr_time = time.time()
-        elapsed = curr_time - start_time
-        
-        if rms > SILENCE_THRESHOLD:
-            if not has_spoken and elapsed > 0.1:
-                has_spoken = True
-                print("   [Speech detected]")
-            silence_start = None
-        else:
-            if has_spoken and silence_start is None:
-                silence_start = curr_time
-        
-        # Stop conditions
-        if has_spoken and isinstance(silence_start, float):
-            if (curr_time - silence_start) > SILENCE_DURATION:
-                print("   [Silence detected, stopping...]")
-                break
-        
-        if elapsed > MAX_DURATION:
-            print("   [Max duration reached, stopping...]")
-            break
-            
-        if not has_spoken and elapsed > 5: # 5 seconds of total silence before giving up
-             print("   [No speech detected, timing out...]")
-             break
-
-    stream.stop_stream()
-    stream.close()
-    p.terminate()
-
-    if not has_spoken and len(frames) < (RATE / CHUNK * MIN_DURATION):
+    print("🎤 Recording with arecord (USB Mic card 3)... Speak now!")
+    audio_file = tempfile.mktemp(suffix=".wav")
+    try:
+        subprocess.run([
+            "arecord", "-D", "plughw:3,0",
+            "-f", "S16_LE", "-c", "1", "-r", "44100",
+            "-d", "8", "-q", audio_file
+        ], check=True, timeout=10)
+        print("   [Recording finished]")
+        return audio_file
+    except Exception as e:
+        print(f"   Recording error: {e}")
         return None
-
-    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-        wf = wave.open(tmp.name, 'wb')
-        wf.setnchannels(CHANNELS)
-        wf.setsampwidth(p.get_sample_size(FORMAT))
-        wf.setframerate(RATE)
-        wf.writeframes(b''.join(frames))
-        wf.close()
-        return tmp.name
 
 def play_response(text):
     print(f"Aria: {text}")
-    tts = gTTS(text=text, lang='en', slow=False)
     
+    tts = gTTS(text=text, lang='en', slow=False)
     with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
         mp3_path = tmp.name
         tts.save(mp3_path)
@@ -117,95 +56,65 @@ def play_response(text):
         pygame.mixer.music.play()
         while pygame.mixer.music.get_busy():
             pygame.time.Clock().tick(10)
+    except Exception as e:
+        print(f"Playback error: {e}")
     finally:
-        pygame.mixer.music.stop()
-        time.sleep(0.2)  # small delay to release handle
+        time.sleep(0.4)   # Extra delay to release file
         try:
             os.unlink(mp3_path)
         except:
             pass
 
 async def main():
-    print("=== Stable Hybrid Voice Assistant (Fixed Playback + 503 Retry) ===")
-    print("Ctrl+C to quit\n")
+    print("=== Aria Voice Assistant - Clean & Stable Version ===")
+    print("USB Mic (card 3) → Gemini → 3.5mm Jack")
+    print("Ctrl+C to stop\n")
 
-    # Initial history with system instruction
-    # Note: SYSTEM_INSTRUCTION is passed in GenerateContentConfig for some SDKs, 
-    # but as a part here to be extra safe for memory.
-    history: list[types.Content] = []
+    history = []
 
     while True:
         audio_file = None
         try:
             audio_file = await record_audio()
-            
             if not audio_file:
-                print("No speech detected. Ready for next input...")
+                await asyncio.sleep(1)
                 continue
 
-            if audio_file is None:
-                continue
-                
             with open(audio_file, "rb") as f:
                 audio_bytes = f.read()
 
-            # Append user turn to history
-            history.append(
-                types.Content(
-                    role="user",
-                    parts=[
-                        types.Part.from_bytes(
-                            data=audio_bytes,
-                            mime_type="audio/wav"
-                        )
-                    ]
-                )
-            )
+            history.append(types.Content(
+                role="user",
+                parts=[types.Part.from_bytes(data=audio_bytes, mime_type="audio/wav")]
+            ))
 
-            # Limit history to prevent token overflow (e.g., last 15 turns)
-            if len(history) > 15:
-                # Keep only the last 15 entries
-                history = list(history[-15:])
+            if len(history) > 10:
+                history = history[-10:]
 
             response = client.models.generate_content(
-                model="models/gemini-flash-lite-latest",
+                model="gemini-2.5-flash",
                 contents=history,
                 config=types.GenerateContentConfig(
                     system_instruction=SYSTEM_INSTRUCTION,
-                    temperature=0.75,
-                    max_output_tokens=150
+                    temperature=0.7,
+                    max_output_tokens=180
                 )
             )
 
-            if response.text:
-                text_response = response.text.strip()
-                # Append model response to history
-                history.append(
-                    types.Content(
-                        role="model",
-                        parts=[types.Part.from_text(text=text_response)]
-                    )
-                )
-            else:
-                text_response = "Sorry, I didn't understand. Can you repeat?"
+            text_response = response.text.strip() if response.text else "Sorry, I didn't catch that."
+            
+            history.append(types.Content(
+                role="model",
+                parts=[types.Part.from_text(text=text_response)]
+            ))
 
             play_response(text_response)
 
         except Exception as e:
-            error_str = str(e).lower()
-            if "429" in error_str or "resource_exhausted" in error_str:
-                print(f"429 - Quota exhausted: {e}")
-                print("Waiting 60 seconds...")
-                await asyncio.sleep(60)
-            elif "503" in error_str or "unavailable" in error_str:
-                print(f"503 - Google servers overloaded: {e}")
-                print("Waiting 10 seconds...")
-                await asyncio.sleep(10)
-            else:
-                print(f"Error: {e}")
-                await asyncio.sleep(2)
+            print(f"Error: {e}")
+            await asyncio.sleep(2)
         finally:
-            if audio_file is not None and isinstance(audio_file, str) and os.path.exists(audio_file):
+            if audio_file and os.path.exists(audio_file):
                 try:
                     os.unlink(audio_file)
                 except:
