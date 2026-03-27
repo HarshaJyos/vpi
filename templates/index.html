@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Aria Admin • Raspberry Pi</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <style>
+        body { font-family: 'Inter', system_ui, sans-serif; }
+        .title-font { font-family: 'Space Grotesk', sans-serif; }
+        .mic-button.recording { animation: pulse 1.5s infinite; }
+        @keyframes pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(34, 211, 238, 0.7); } 70% { box-shadow: 0 0 0 30px rgba(34, 211, 238, 0); } }
+    </style>
+</head>
+<body class="bg-zinc-950 text-white min-h-screen">
+    <div class="max-w-7xl mx-auto p-6">
+        <!-- Header -->
+        <div class="flex justify-between items-center mb-8">
+            <div class="flex items-center gap-4">
+                <div class="w-14 h-14 bg-cyan-500 rounded-3xl flex items-center justify-center text-3xl shadow-lg">🎤</div>
+                <div>
+                    <h1 class="title-font text-4xl font-semibold tracking-tight">Aria Admin</h1>
+                    <p class="text-cyan-400 text-sm">Raspberry Pi Voice Assistant Control</p>
+                </div>
+            </div>
+            
+            <div class="flex items-center gap-4">
+                <button onclick="clearHistory()" 
+                        class="flex items-center gap-2 bg-red-500/10 hover:bg-red-500/20 px-6 py-3 rounded-3xl text-red-400">
+                    <i class="fa-solid fa-trash"></i> Clear History
+                </button>
+                <button onclick="showSettings()" 
+                        class="flex items-center gap-2 bg-zinc-800 hover:bg-zinc-700 px-6 py-3 rounded-3xl">
+                    <i class="fa-solid fa-cog"></i> Settings
+                </button>
+            </div>
+        </div>
+
+        <div class="grid grid-cols-12 gap-6">
+            <!-- Main Chat + Voice Area -->
+            <div class="col-span-8 bg-zinc-900 rounded-3xl overflow-hidden border border-zinc-800">
+                <div class="p-6 border-b border-zinc-800 flex items-center justify-between">
+                    <div class="flex items-center gap-3">
+                        <div class="w-3 h-3 bg-emerald-400 rounded-full animate-pulse"></div>
+                        <span class="font-medium">Aria is Live</span>
+                    </div>
+                    <span id="status" class="text-sm text-zinc-400">Ready • Push to Talk</span>
+                </div>
+
+                <!-- Chat Messages -->
+                <div id="chat-container" class="h-[520px] overflow-y-auto p-6 space-y-6 bg-zinc-950">
+                    <!-- Messages added by JS -->
+                </div>
+
+                <!-- Controls Section - Replace the old one -->
+<div class="p-8 bg-zinc-900 border-t border-zinc-800 flex flex-col items-center gap-6">
+    <button onclick="toggleAria()" id="talk-btn"
+            class="mic-button w-28 h-28 bg-gradient-to-br from-cyan-400 to-violet-500 hover:from-cyan-300 hover:to-violet-400 rounded-full flex items-center justify-center text-6xl shadow-2xl transition-all">
+        <i id="mic-icon" class="fa-solid fa-microphone"></i>
+    </button>
+    <p id="listen-status" class="text-zinc-400 text-sm font-medium">Press to Wake Aria (Continuous Listening)</p>
+</div>
+
+                <!-- Text Input -->
+                <div class="px-8 pb-8 bg-zinc-900 flex gap-3">
+                    <input id="text-input" type="text" placeholder="Type command or message..." 
+                           onkeydown="if(event.key==='Enter') sendText()"
+                           class="flex-1 bg-zinc-800 border border-zinc-700 focus:border-cyan-400 rounded-3xl px-6 py-4 outline-none">
+                    <button onclick="sendText()" 
+                            class="bg-cyan-400 hover:bg-cyan-300 text-black px-10 rounded-3xl font-semibold">Send</button>
+                </div>
+            </div>
+
+            <!-- Sidebar Controls -->
+            <div class="col-span-4 space-y-6">
+                <!-- Music Panel -->
+                <div class="bg-zinc-900 rounded-3xl p-6 border border-zinc-800">
+                    <h3 class="font-semibold mb-4 flex items-center gap-2"><i class="fa-solid fa-music text-purple-400"></i> Quick Music</h3>
+                    <div class="grid grid-cols-2 gap-3">
+                        <button onclick="playMood('happy')" class="bg-zinc-800 hover:bg-amber-500/10 p-4 rounded-2xl text-left transition">
+                            <span class="text-2xl">😊</span><br>
+                            <span class="font-medium">Happy</span>
+                        </button>
+                        <button onclick="playMood('melody')" class="bg-zinc-800 hover:bg-purple-500/10 p-4 rounded-2xl text-left transition">
+                            <span class="text-2xl">🎵</span><br>
+                            <span class="font-medium">Melody</span>
+                        </button>
+                        <button onclick="playMood('calm')" class="bg-zinc-800 hover:bg-sky-500/10 p-4 rounded-2xl text-left transition">
+                            <span class="text-2xl">🌿</span><br>
+                            <span class="font-medium">Calm</span>
+                        </button>
+                        <button onclick="playMood('energetic')" class="bg-zinc-800 hover:bg-orange-500/10 p-4 rounded-2xl text-left transition">
+                            <span class="text-2xl">⚡</span><br>
+                            <span class="font-medium">Energetic</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- News -->
+                <button onclick="getNews()" 
+                        class="w-full bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 hover:border-cyan-400 p-6 rounded-3xl transition text-left">
+                    <div class="flex justify-between items-start">
+                        <div>
+                            <h3 class="font-semibold text-lg">Latest News</h3>
+                            <p class="text-sm text-zinc-400">Ask Aria to read news</p>
+                        </div>
+                        <i class="fa-solid fa-newspaper text-3xl text-cyan-400"></i>
+                    </div>
+                </button>
+
+                <!-- Now Playing -->
+                <div id="now-playing" class="bg-zinc-900 rounded-3xl p-6 border border-zinc-800 min-h-[180px]">
+                    <h3 class="uppercase text-xs tracking-widest mb-3">Now Playing</h3>
+                    <div class="text-center text-zinc-400 py-8">
+                        <i class="fa-solid fa-music text-5xl mb-3"></i>
+                        <p>No music playing</p>
+                    </div>
+                    <div id="youtube-player" class="hidden mt-4 rounded-2xl overflow-hidden"></div>
+                </div>
+
+                <!-- System Status -->
+                <div class="bg-zinc-900 rounded-3xl p-6 text-sm border border-zinc-800">
+                    <h4 class="font-medium mb-4">System Status</h4>
+                    <div class="space-y-3 text-xs">
+                        <div class="flex justify-between"><span class="text-zinc-400">Model</span><span class="font-mono">gemini-2.5-flash</span></div>
+                        <div class="flex justify-between"><span class="text-zinc-400">Microphone</span><span class="text-emerald-400">Browser Mic</span></div>
+                        <div class="flex justify-between"><span class="text-zinc-400">TTS Engine</span><span>gTTS</span></div>
+                        <div class="flex justify-between"><span class="text-zinc-400">History</span><span id="history-count">0 turns</span></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Settings Modal -->
+    <div id="settings-modal" class="hidden fixed inset-0 bg-black/80 flex items-center justify-center z-50">
+        <div class="bg-zinc-900 w-full max-w-lg mx-4 rounded-3xl">
+            <div class="p-8">
+                <h2 class="text-2xl font-semibold mb-6">Admin Settings</h2>
+                
+                <div class="mb-6">
+                    <label class="block text-sm text-zinc-400 mb-2">Gemini API Key</label>
+                    <input id="api-key-input" type="password" placeholder="AIzaSy..." 
+                           class="w-full bg-zinc-800 border border-zinc-700 rounded-2xl px-5 py-4 focus:border-cyan-400 outline-none">
+                </div>
+
+                <div class="flex gap-3">
+                    <button onclick="saveApiKey()" 
+                            class="flex-1 bg-cyan-400 hover:bg-cyan-300 text-black font-semibold py-4 rounded-2xl">Save Key</button>
+                    <button onclick="testApiKey()" 
+                            class="flex-1 bg-emerald-400 hover:bg-emerald-300 text-black font-semibold py-4 rounded-2xl">Test Connection</button>
+                </div>
+
+                <div id="test-result" class="mt-4 text-sm min-h-[28px]"></div>
+            </div>
+            
+            <div class="border-t border-zinc-800 p-4 flex justify-end">
+                <button onclick="hideSettings()" class="px-8 py-3 text-zinc-400">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+    let isAriaAwake = false;
+
+    function addMessage(role, text, isVoice = false) {
+        const container = document.getElementById('chat-container');
+        const div = document.createElement('div');
+        div.className = `flex ${role === 'user' ? 'justify-end' : 'justify-start'}`;
+        
+        if (role === 'user') {
+            div.innerHTML = `<div class="max-w-[75%]"><div class="bg-cyan-400 text-black px-5 py-3 rounded-3xl rounded-br-sm">${isVoice ? '🎤 Voice Input' : text}</div></div>`;
+        } else {
+            div.innerHTML = `<div class="max-w-[75%]"><div class="bg-zinc-800 px-5 py-3 rounded-3xl rounded-bl-sm">${text}</div></div>`;
+        }
+        container.appendChild(div);
+        container.scrollTop = container.scrollHeight;
+    }
+
+    async function toggleAria() {
+        const btn = document.getElementById('talk-btn');
+        const icon = document.getElementById('mic-icon');
+        const statusText = document.getElementById('listen-status');
+
+        try {
+            const res = await fetch('/api/toggle-listen', { method: 'POST' });
+            const data = await res.json();
+
+            if (data.success) {
+                isAriaAwake = data.listening;
+                
+                if (isAriaAwake) {
+                    btn.classList.add('recording', 'scale-110');
+                    icon.className = "fa-solid fa-stop text-white";
+                    statusText.innerHTML = "🎤 Aria is Awake • Listening dynamically... (Speak naturally)";
+                    statusText.classList.add('text-red-400');
+                } else {
+                    btn.classList.remove('recording', 'scale-110');
+                    icon.className = "fa-solid fa-microphone";
+                    statusText.innerHTML = "Press to Wake Aria (Continuous Listening)";
+                    statusText.classList.remove('text-red-400');
+                }
+            } else {
+                alert(data.error || "Failed to toggle");
+            }
+        } catch (e) {
+            alert("Cannot connect to server. Make sure app.py is running.");
+        }
+    }
+
+    // Keep all your other functions (sendText, playMood, getNews, clearHistory, saveApiKey, etc.)
+    // Copy them from your previous full index.html if they are missing.
+
+    window.onload = () => {
+        addMessage('aria', "Hello Admin! Press the big microphone button to wake me up. I will listen dynamically until you press it again.");
+    };
+</script>
+</body>
+</html>
