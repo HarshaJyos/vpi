@@ -19,11 +19,13 @@ conversation_history = []
 is_listening = False
 voice_task = None
 
-# ============== SETTINGS ==============
-SILENCE_THRESHOLD = 0.005
-SILENCE_DURATION = 1.6
+# ============== DYNAMIC VAD SETTINGS - FINAL TUNED ==============
+SILENCE_THRESHOLD = 0.0045      # Good sensitivity for your USB mic
+SILENCE_DURATION = 6          # ← Wait 1.8 seconds of silence before stopping (as you requested)
+MIN_UTTERANCE_DURATION = 0.6    # Ignore accidental clicks/noise
+CHUNK_DURATION = 0.08           # Faster and smoother detection
 SAMPLE_RATE = 44100
-# =====================================
+# ================================================================
 
 def init_client():
     global client
@@ -126,45 +128,59 @@ async def play_response(text):
             except:
                 pass
 
-
 class DynamicRecorder:
     def __init__(self):
         self.audio_buffer = []
         self.silence_counter = 0
         self.is_speaking = False
+        self.speaking_start_time = 0
 
     def callback(self, indata, frames, time_info, status):
         if status:
-            print(f"[Audio] {status}")
+            print(f"[Audio Status] {status}")
+
         audio_chunk = np.frombuffer(indata, dtype=np.float32)
-        energy = np.sqrt(np.mean(audio_chunk ** 2))
+        energy = np.sqrt(np.mean(audio_chunk ** 2))   # RMS energy
+
+        current_time = time.time()
 
         if energy > SILENCE_THRESHOLD:
+            # User is speaking
             self.audio_buffer.extend(audio_chunk.tolist())
             if not self.is_speaking:
                 print("🔊 Speech started")
-            self.is_speaking = True
+                self.is_speaking = True
+                self.speaking_start_time = current_time
             self.silence_counter = 0
         else:
+            # Quiet period
             if self.is_speaking:
-                self.silence_counter += 0.1
-                self.audio_buffer.extend(audio_chunk.tolist())
-                if self.silence_counter >= SILENCE_DURATION:
-                    print("🔇 Silence detected - ending recording")
+                self.silence_counter += CHUNK_DURATION
+                self.audio_buffer.extend(audio_chunk.tolist())   # keep small tail
+
+                # Only stop after required silence AND minimum speaking time
+                if (self.silence_counter >= SILENCE_DURATION and 
+                    (current_time - self.speaking_start_time) >= MIN_UTTERANCE_DURATION):
+                    print(f"🔇 Silence for {self.silence_counter:.1f}s → Ending recording")
                     self.is_speaking = False
                     raise sd.CallbackStop()
+            else:
+                # Very quiet background - keep tiny buffer
+                if len(self.audio_buffer) < 25000:
+                    self.audio_buffer.extend(audio_chunk.tolist())
 
     async def record_until_silence(self):
-        print("\n🎤 Listening... Speak now")
+        print("\n🎤 Listening... Speak naturally (any length allowed)")
         self.audio_buffer = []
         self.silence_counter = 0
         self.is_speaking = False
+        self.speaking_start_time = 0
 
         try:
             with sd.InputStream(samplerate=SAMPLE_RATE, channels=1, dtype='float32',
                                 blocksize=0, callback=self.callback):
                 while (self.is_speaking or len(self.audio_buffer) == 0) and is_listening:
-                    await asyncio.sleep(0.1)
+                    await asyncio.sleep(0.05)
         except sd.CallbackStop:
             pass
         except Exception as e:
@@ -173,10 +189,11 @@ class DynamicRecorder:
         duration = len(self.audio_buffer) / SAMPLE_RATE
         print(f"[RECORD] Finished - Duration: {duration:.2f}s")
 
-        if duration < 0.6:
+        if duration < 0.7:
             print("⚠️ Too short - ignored")
             return None
 
+        # Convert to WAV
         audio_array = np.array(self.audio_buffer, dtype=np.float32)
         audio_int16 = (audio_array * 32767).astype(np.int16)
 
@@ -184,9 +201,8 @@ class DynamicRecorder:
         from scipy.io.wavfile import write
         write(audio_file, SAMPLE_RATE, audio_int16)
 
-        print(f"✅ Recorded {duration:.1f}s → Sending to Gemini")
+        print(f"✅ Recorded {duration:.1f}s of speech → Sending to Gemini")
         return audio_file
-
 
 async def continuous_voice_loop():
     global conversation_history
